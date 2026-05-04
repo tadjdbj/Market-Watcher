@@ -277,13 +277,11 @@ def special_move_alert(symbol, market, total_score):
 
 
 def quick_trade_plan(symbol, signal, conf):
-    if signal == "WAIT" or conf < 70:
-        return {
-            "entry_style": "Pas de scalp conseillé",
-            "amount_eur": 0,
-            "leverage": "x1",
-            "hold_time": "0 min"
-        }
+   if signal == "WAIT" or conf < 70:
+    return {
+        "entry_style": "Pas de scalp conseillé",
+        "amount_eur": 0,
+        "leverage": "
 
     if symbol == "BTCUSD":
         amount = 12 if conf < 80 else 18
