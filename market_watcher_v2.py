@@ -289,30 +289,26 @@ def build_message(result):
     pct = result["market"]["pct_24h"]
     lev = result["suggested_leverage"]
     amt = result["suggested_risk_eur"]
+
     reasons = "\n".join([f"• {x}" for x in result["reasons"][:4]])
+    head_news = "\n".join([f"• {a['title']} ({a['source']})" for a in result["articles"][:3]]) if result["articles"] else "• Aucune news dispo"
 
-    head_news = ""
-    if result["articles"]:
-        head_news = "\n".join(
-            [f"• {a['title']} ({a['source']})" for a in result["articles"][:3]]
-        )
+    price_txt = f"{price:.2f}" if isinstance(price, (int, float)) and price is not None else "n/a"
+    pct_txt = f"{pct:+.2f}%" if isinstance(pct, (int, float)) else "n/a"
 
-    msg = f"""{emoji} {symbol} — Signal: {signal}
-Prix: {price if price is not None else 'n/a'}
-Variation 24h: {pct:.2f}% if isinstance(pct, (int, float)) else pct
-
-Confiance: {conf}%
-Biais news: {news_bias}
-Levier conseillé: {lev}
-Montant risqué conseillé: {amt} €
-
-Pourquoi:
-{reasons if reasons else '• Pas assez de données'}
-
-News:
-{head_news if head_news else '• Aucune news disponible'}
-"""
-    return msg.strip()
+    return (
+        f"Salut 👋\n\n"
+        f"{emoji} <b>{symbol}</b>\n"
+        f"Prix : <b>{price_txt}</b>\n"
+        f"24h : <b>{pct_txt}</b>\n"
+        f"Signal : <b>{signal}</b>\n"
+        f"Confiance : <b>{conf}%</b>\n"
+        f"Biais news : <b>{news_bias}</b>\n"
+        f"Levier conseillé : <b>{lev}</b>\n"
+        f"Risque conseillé : <b>{amt} €</b>\n\n"
+        f"Pourquoi :\n{reasons if reasons else '• Rien de spécial pour le moment'}\n\n"
+        f"News récentes :\n{head_news}\n"
+    )
 
 
 def send_telegram(text):
@@ -328,6 +324,22 @@ def send_telegram(text):
     }
     r = requests.post(url, data=payload, timeout=20)
     r.raise_for_status()
+
+
+def send_photo(photo_path, caption):
+    if not SEND_TELEGRAM:
+        print(caption)
+        return
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto"
+    with open(photo_path, "rb") as f:
+        files = {"photo": f}
+        data = {
+            "chat_id": CHAT_ID,
+            "caption": caption[:1024],
+            "parse_mode": "HTML"
+        }
+        r = requests.post(url, data=data, files=files, timeout=30)
+        r.raise_for_status()
 
 
 def analyze_one(market_cfg):
@@ -363,10 +375,16 @@ def analyze_one(market_cfg):
 def main():
     print("Lancement analyse complète...")
     results = [analyze_one(m) for m in MARKETS]
+
     for r in results:
         text = build_message(r)
-        send_telegram(text)
+        image_path = OUTPUT_DIR / f"{r['symbol']}.jpg"
+        if image_path.exists():
+            send_photo(str(image_path), text)
+        else:
+            send_telegram(text)
         print(f"[OK] {r['symbol']} envoyé")
+
     print("Terminé.")
 
 
