@@ -3,6 +3,7 @@ name: Market Watcher
 on:
   schedule:
     - cron: '0 0,4,8,12,16,20 * * *'
+      timezone: Europe/Paris
   workflow_dispatch:
 
 jobs:
