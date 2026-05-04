@@ -277,31 +277,33 @@ def special_move_alert(symbol, market, total_score):
 
 
 def quick_trade_plan(symbol, signal, conf):
-   if signal == "WAIT" or conf < 70:
-    return {
-        "entry_style": "Pas de scalp conseillé",
-        "amount_eur": 0,
-        "leverage": "
-
-    if symbol == "BTCUSD":
-        amount = 12 if conf < 80 else 18
-        lev = "x2 max"
-        hold = "20 à 45 min"
-    elif symbol == "EURUSD":
-        amount = 12 if conf < 80 else 20
-        lev = "x3 max"
-        hold = "30 à 90 min"
-    elif symbol == "XAUUSD":
-        amount = 12 if conf < 80 else 18
-        lev = "x2 max" if conf < 80 else "x3 max"
-        hold = "20 à 60 min"
-    else:
+    # TOUJOURS du scalp, c\'est ton choix - mise fixe selon confiance et actif
+    if conf < 60:
         amount = 10
         lev = "x1"
-        hold = "30 min max"
+        hold = "15 à 30 min"
+        style = "Scalp prudent"
+    elif conf < 75:
+        amount = 12
+        lev = "x1.5"
+        hold = "20 à 45 min"
+        style = "Scalp standard"
+    elif conf < 85:
+        amount = 15
+        lev = "x2 max"
+        hold = "30 à 60 min"
+        style = "Scalp agressif"
+    else:
+        amount = 20
+        lev = "x3 max"
+        hold = "45 à 90 min"
+        style = "Scalp fort"
+
+    # Direction selon signal (WAIT = neutre)
+    direction = f"Scalp {signal}" if signal != "WAIT" else "Scalp neutre"
 
     return {
-        "entry_style": f"Scalp {signal}",
+        "entry_style": f"{style} {direction}",
         "amount_eur": amount,
         "leverage": lev,
         "hold_time": hold
