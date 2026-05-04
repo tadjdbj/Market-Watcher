@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta, UTC
 from pathlib import Path
+from zoneinfo import ZoneInfo
 import os
-import re
 import requests
 from playwright.sync_api import sync_playwright
 
@@ -278,7 +278,7 @@ def build_message(result):
 
     price_txt = f"{price:.2f}" if isinstance(price, (int, float)) and price is not None else "n/a"
     pct_txt = f"{pct:+.2f}%" if isinstance(pct, (int, float)) else "n/a"
-    now = datetime.now().strftime("%H:%M")
+    now = datetime.now(ZoneInfo("Europe/Paris")).strftime("%d/%m/%Y à %H:%M")
 
     return (
         f"Salut 👋 — update du marché à {now}\n\n"
@@ -380,12 +380,10 @@ def analyze_one(market_cfg):
 def main():
     print("Lancement analyse complète...")
 
-    results = []
     for m in MARKETS:
         res = analyze_one(m)
-        results.append(res)
-
         image_path = OUTPUT_DIR / f"{res['symbol']}.jpg"
+
         try:
             shot_tradingview(res["symbol"], m["url"], image_path)
         except Exception as e:
