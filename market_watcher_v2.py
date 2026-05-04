@@ -1,7 +1,9 @@
 from datetime import datetime, timedelta, UTC
 from pathlib import Path
 import os
+import re
 import requests
+from playwright.sync_api import sync_playwright
 
 OUTPUT_DIR = Path("outputs")
 OUTPUT_DIR.mkdir(exist_ok=True)
@@ -17,18 +19,21 @@ MARKETS = [
         "symbol": "BTCUSD",
         "name": "Bitcoin",
         "type": "crypto",
+        "url": "https://www.tradingview.com/chart/?symbol=BITSTAMP%3ABTCUSD",
         "move_alert_pct": 1.8
     },
     {
         "symbol": "EURUSD",
         "name": "Euro / Dollar",
         "type": "forex",
+        "url": "https://www.tradingview.com/chart/?symbol=FX%3AEURUSD",
         "move_alert_pct": 0.4
     },
     {
         "symbol": "XAUUSD",
         "name": "Gold",
         "type": "metal",
+        "url": "https://www.tradingview.com/chart/?symbol=OANDA%3AXAUUSD",
         "move_alert_pct": 1.0
     }
 ]
@@ -71,13 +76,7 @@ def get_btc_data():
     item = data.get("bitcoin", {})
     price = safe_float(item.get("usd"))
     pct_24h = safe_float(item.get("usd_24h_change"))
-    return {
-        "price": price,
-        "open": None,
-        "high": None,
-        "low": None,
-        "pct_24h": pct_24h or 0
-    }
+    return {"price": price, "pct_24h": pct_24h or 0}
 
 
 def get_eurusd_data():
@@ -87,13 +86,7 @@ def get_eurusd_data():
     price = safe_float((latest.get("rates") or {}).get("USD"))
     prev_price = safe_float((prev.get("rates") or {}).get("USD"))
     pct_24h = ((price - prev_price) / prev_price * 100) if price and prev_price else 0
-    return {
-        "price": price,
-        "open": prev_price,
-        "high": None,
-        "low": None,
-        "pct_24h": pct_24h
-    }
+    return {"price": price, "pct_24h": pct_24h}
 
 
 def get_xauusd_data():
@@ -107,21 +100,9 @@ def get_xauusd_data():
                     price = safe_float(v)
                     if price is not None:
                         break
-        return {
-            "price": price,
-            "open": None,
-            "high": None,
-            "low": None,
-            "pct_24h": 0
-        }
+        return {"price": price, "pct_24h": 0}
     except:
-        return {
-            "price": None,
-            "open": None,
-            "high": None,
-            "low": None,
-            "pct_24h": 0
-        }
+        return {"price": None, "pct_24h": 0}
 
 
 def get_market_data(symbol):
@@ -131,7 +112,7 @@ def get_market_data(symbol):
         return get_eurusd_data()
     if symbol == "XAUUSD":
         return get_xauusd_data()
-    return {"price": None, "open": None, "high": None, "low": None, "pct_24h": 0}
+    return {"price": None, "pct_24h": 0}
 
 
 def fetch_news(query):
@@ -184,11 +165,11 @@ def score_news(articles):
 
     if raw >= 3:
         return 2, "positif", "Flux news plutôt constructif 📈"
-    if raw == 1 or raw == 2:
+    if raw in (1, 2):
         return 1, "légèrement positif", "Actualité légèrement favorable 🙂"
     if raw <= -3:
         return -2, "négatif", "Flux news sous pression 📉"
-    if raw == -1 or raw == -2:
+    if raw in (-1, -2):
         return -1, "légèrement négatif", "Actualité un peu défensive 😐"
     return 0, "neutre", "Actualité mitigée 🤝"
 
@@ -291,13 +272,16 @@ def build_message(result):
     amt = result["suggested_risk_eur"]
 
     reasons = "\n".join([f"• {x}" for x in result["reasons"][:4]])
-    head_news = "\n".join([f"• {a['title']} ({a['source']})" for a in result["articles"][:3]]) if result["articles"] else "• Aucune news dispo"
+    head_news = "\n".join(
+        [f"• {a['title']} ({a['source']})" for a in result["articles"][:3]]
+    ) if result["articles"] else "• Aucune news dispo"
 
     price_txt = f"{price:.2f}" if isinstance(price, (int, float)) and price is not None else "n/a"
     pct_txt = f"{pct:+.2f}%" if isinstance(pct, (int, float)) else "n/a"
+    now = datetime.now().strftime("%H:%M")
 
     return (
-        f"Salut 👋\n\n"
+        f"Salut 👋 — update du marché à {now}\n\n"
         f"{emoji} <b>{symbol}</b>\n"
         f"Prix : <b>{price_txt}</b>\n"
         f"24h : <b>{pct_txt}</b>\n"
@@ -342,6 +326,27 @@ def send_photo(photo_path, caption):
         r.raise_for_status()
 
 
+def shot_tradingview(symbol, url, out_path):
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True, args=["--no-sandbox"])
+        page = browser.new_page(viewport={"width": 1600, "height": 900}, device_scale_factor=1)
+        page.goto(url, wait_until="domcontentloaded", timeout=90000)
+        page.wait_for_timeout(12000)
+
+        try:
+            page.mouse.wheel(0, 450)
+            page.wait_for_timeout(1500)
+        except:
+            pass
+
+        try:
+            page.screenshot(path=str(out_path), full_page=False)
+        except:
+            page.screenshot(path=str(out_path), full_page=True)
+
+        browser.close()
+
+
 def analyze_one(market_cfg):
     symbol = market_cfg["symbol"]
     market = get_market_data(symbol)
@@ -374,16 +379,27 @@ def analyze_one(market_cfg):
 
 def main():
     print("Lancement analyse complète...")
-    results = [analyze_one(m) for m in MARKETS]
 
-    for r in results:
-        text = build_message(r)
-        image_path = OUTPUT_DIR / f"{r['symbol']}.jpg"
-        if image_path.exists():
+    results = []
+    for m in MARKETS:
+        res = analyze_one(m)
+        results.append(res)
+
+        image_path = OUTPUT_DIR / f"{res['symbol']}.jpg"
+        try:
+            shot_tradingview(res["symbol"], m["url"], image_path)
+        except Exception as e:
+            print(f"[WARN] screenshot failed for {res['symbol']}: {e}")
+            image_path = None
+
+        text = build_message(res)
+
+        if image_path and image_path.exists():
             send_photo(str(image_path), text)
         else:
             send_telegram(text)
-        print(f"[OK] {r['symbol']} envoyé")
+
+        print(f"[OK] {res['symbol']} envoyé")
 
     print("Terminé.")
 
