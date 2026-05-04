@@ -1,8 +1,6 @@
 from datetime import datetime, timedelta, UTC
 from pathlib import Path
 import os
-import json
-import math
 import requests
 
 OUTPUT_DIR = Path("outputs")
@@ -19,21 +17,18 @@ MARKETS = [
         "symbol": "BTCUSD",
         "name": "Bitcoin",
         "type": "crypto",
-        "price_url": "https://api.binance.com/api/v3/ticker/24hr?symbol=BTCUSDT",
         "move_alert_pct": 1.8
     },
     {
         "symbol": "EURUSD",
         "name": "Euro / Dollar",
         "type": "forex",
-        "price_url": "https://api.frankfurter.app/latest?from=EUR&to=USD",
         "move_alert_pct": 0.4
     },
     {
         "symbol": "XAUUSD",
         "name": "Gold",
         "type": "metal",
-        "price_url": "https://api.metals.live/v1/spot/gold",
         "move_alert_pct": 1.0
     }
 ]
@@ -69,30 +64,32 @@ def fetch_json(url, params=None):
 
 
 def get_btc_data():
-    data = fetch_json("https://api.binance.com/api/v3/ticker/24hr", {"symbol": "BTCUSDT"})
-    price = safe_float(data.get("lastPrice"))
-    open_price = safe_float(data.get("openPrice"))
-    high = safe_float(data.get("highPrice"))
-    low = safe_float(data.get("lowPrice"))
-    pct_24h = safe_float(data.get("priceChangePercent"))
+    data = fetch_json(
+        "https://api.coingecko.com/api/v3/simple/price",
+        {"ids": "bitcoin", "vs_currencies": "usd", "include_24hr_change": "true"}
+    )
+    item = data.get("bitcoin", {})
+    price = safe_float(item.get("usd"))
+    pct_24h = safe_float(item.get("usd_24h_change"))
     return {
         "price": price,
-        "open": open_price,
-        "high": high,
-        "low": low,
-        "pct_24h": pct_24h
+        "open": None,
+        "high": None,
+        "low": None,
+        "pct_24h": pct_24h or 0
     }
 
 
 def get_eurusd_data():
     latest = fetch_json("https://api.frankfurter.app/latest", {"from": "EUR", "to": "USD"})
-    hist = fetch_json("https://api.frankfurter.app/{}".format((datetime.now().date() - timedelta(days=1)).isoformat()), {"from": "EUR", "to": "USD"})
+    prev_date = (datetime.now(UTC).date() - timedelta(days=1)).isoformat()
+    prev = fetch_json(f"https://api.frankfurter.app/{prev_date}", {"from": "EUR", "to": "USD"})
     price = safe_float((latest.get("rates") or {}).get("USD"))
-    prev = safe_float((hist.get("rates") or {}).get("USD"))
-    pct_24h = ((price - prev) / prev * 100) if price and prev else 0
+    prev_price = safe_float((prev.get("rates") or {}).get("USD"))
+    pct_24h = ((price - prev_price) / prev_price * 100) if price and prev_price else 0
     return {
         "price": price,
-        "open": prev,
+        "open": prev_price,
         "high": None,
         "low": None,
         "pct_24h": pct_24h
@@ -100,22 +97,31 @@ def get_eurusd_data():
 
 
 def get_xauusd_data():
-    data = fetch_json("https://api.metals.live/v1/spot/gold")
-    price = None
-    if isinstance(data, list) and data:
-        last = data[0]
-        if isinstance(last, dict):
-            for _, v in last.items():
-                price = safe_float(v)
-                if price:
-                    break
-    return {
-        "price": price,
-        "open": None,
-        "high": None,
-        "low": None,
-        "pct_24h": 0
-    }
+    try:
+        data = fetch_json("https://api.metals.live/v1/spot/gold")
+        price = None
+        if isinstance(data, list) and data:
+            last = data[0]
+            if isinstance(last, dict):
+                for _, v in last.items():
+                    price = safe_float(v)
+                    if price is not None:
+                        break
+        return {
+            "price": price,
+            "open": None,
+            "high": None,
+            "low": None,
+            "pct_24h": 0
+        }
+    except:
+        return {
+            "price": None,
+            "open": None,
+            "high": None,
+            "low": None,
+            "pct_24h": 0
+        }
 
 
 def get_market_data(symbol):
@@ -150,16 +156,19 @@ def collect_news(symbol):
         try:
             for a in fetch_news(q):
                 title = (a.get("title") or "").strip()
+                desc = (a.get("description") or "").strip()
+                url = (a.get("url") or "").strip()
+                source = ((a.get("source") or {}).get("name") or "").strip()
                 if title and title.lower() not in seen:
                     seen.add(title.lower())
                     results.append({
                         "title": title,
-                        "description": (a.get("description") or "").strip(),
-                        "source": ((a.get("source") or {}).get("name") or "").strip(),
-                        "url": (a.get("url") or "").strip()
+                        "description": desc,
+                        "source": source,
+                        "url": url
                     })
-        except Exception as e:
-            print(f"[NEWS ERROR] {symbol} | {q} | {e}")
+        except Exception:
+            pass
     return results[:8]
 
 
@@ -190,7 +199,7 @@ def score_market(symbol, market):
     pct = market.get("pct_24h") or 0
     price = market.get("price")
 
-    if price:
+    if price is not None:
         reasons.append(f"Prix actuel: {price}")
 
     if symbol == "BTCUSD":
@@ -280,86 +289,85 @@ def build_message(result):
     pct = result["market"]["pct_24h"]
     lev = result["suggested_leverage"]
     amt = result["suggested_risk_eur"]
-
     reasons = "\n".join([f"• {x}" for x in result["reasons"][:4]])
-    head_news = "\n".join([f"• {x['title']}" for x in result["articles"][:2]]) if result["articles"] else "• Pas de news marquante relevée"
 
-    return (
-        f"Salut Tadj 👋\n\n"
-        f"Voici le point du moment sur {symbol} {emoji}\n\n"
-        f"Signal : {signal}\n"
-        f"Confiance : {conf}%\n"
-        f"Prix actuel : {price}\n"
-        f"Variation 24h : {round(pct, 3)}%\n"
-        f"Biais news : {news_bias} 📰\n"
-        f"Levier conseillé : {lev}\n"
-        f"Montant conseillé : {amt} €\n\n"
-        f"Pourquoi :\n{reasons}\n\n"
-        f"Actu marquante :\n{head_news}\n\n"
-        f"Ce sont des conseils, pas une obligation 🤝"
-    )
+    head_news = ""
+    if result["articles"]:
+        head_news = "\n".join(
+            [f"• {a['title']} ({a['source']})" for a in result["articles"][:3]]
+        )
+
+    msg = f"""{emoji} {symbol} — Signal: {signal}
+Prix: {price if price is not None else 'n/a'}
+Variation 24h: {pct:.2f}% if isinstance(pct, (int, float)) else pct
+
+Confiance: {conf}%
+Biais news: {news_bias}
+Levier conseillé: {lev}
+Montant risqué conseillé: {amt} €
+
+Pourquoi:
+{reasons if reasons else '• Pas assez de données'}
+
+News:
+{head_news if head_news else '• Aucune news disponible'}
+"""
+    return msg.strip()
 
 
-def send_telegram_message(text):
+def send_telegram(text):
+    if not SEND_TELEGRAM:
+        print(text)
+        return
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    r = requests.post(url, data={"chat_id": CHAT_ID, "text": text}, timeout=20)
+    payload = {
+        "chat_id": CHAT_ID,
+        "text": text,
+        "parse_mode": "HTML",
+        "disable_web_page_preview": True
+    }
+    r = requests.post(url, data=payload, timeout=20)
     r.raise_for_status()
 
 
-def analyze_one(m):
-    symbol = m["symbol"]
+def analyze_one(market_cfg):
+    symbol = market_cfg["symbol"]
     market = get_market_data(symbol)
     articles = collect_news(symbol)
-    news_score, news_bias, news_reason = score_news(articles)
-    market_score, market_reasons = score_market(symbol, market)
+    news_score, news_bias, news_note = score_news(articles)
+    market_score, reasons = score_market(symbol, market)
 
-    total = news_score + market_score
-    signal, emoji = final_signal(total)
-    conf = confidence(total)
-    amount = suggested_risk_eur(signal, conf, capital=1000)
+    total_score = news_score + market_score
+    signal, emoji = final_signal(total_score)
+    conf = confidence(total_score)
+    risk = suggested_risk_eur(signal, conf)
     lev = suggested_leverage(signal, conf, symbol)
 
-    reasons = market_reasons + [news_reason]
+    if news_note:
+        reasons.append(news_note)
+
     return {
         "symbol": symbol,
-        "signal": signal,
         "emoji": emoji,
+        "signal": signal,
         "confidence": conf,
         "news_bias": news_bias,
-        "news_score": news_score,
-        "market_score": market_score,
-        "total_score": total,
         "market": market,
-        "articles": articles,
         "reasons": reasons,
-        "suggested_risk_eur": amount,
+        "articles": articles[:3],
+        "suggested_risk_eur": risk,
         "suggested_leverage": lev
     }
-
-
-def save_reports(results):
-    stamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    txt = []
-    for r in results:
-        txt.append(json.dumps(r, ensure_ascii=False, indent=2))
-    Path(f"outputs/report_{stamp}.txt").write_text("\n\n".join(txt), encoding="utf-8")
-    Path("outputs/last_report.json").write_text(json.dumps(results, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def main():
     print("Lancement analyse complète...")
     results = [analyze_one(m) for m in MARKETS]
-    save_reports(results)
-
-    if SEND_TELEGRAM:
-        for r in results:
-            msg = build_message(r)
-            send_telegram_message(msg)
-        print("Messages Telegram envoyés.")
-    else:
-        print("Telegram désactivé.")
-
-    print("Analyse terminée.")
+    for r in results:
+        text = build_message(r)
+        send_telegram(text)
+        print(f"[OK] {r['symbol']} envoyé")
+    print("Terminé.")
 
 
 if __name__ == "__main__":
