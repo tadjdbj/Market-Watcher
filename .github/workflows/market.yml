@@ -33,4 +33,4 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           NEWSAPI_KEY: ${{ secrets.NEWSAPI_KEY }}
         run: |
-          python market_watcher_v2.py
+          python market_watcher_v3.py
